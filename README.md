@@ -6,7 +6,7 @@
 
 *Signal Labs Hackathon 2026 — **Distributed Systems** track*
 
-### ▶ [Watch the demo](https://youtu.be/2SZaINsWPrI)
+### ▶ [Watch the demo](https://youtu.be/s9anCsTpBRY)
 
 [Architecture](#architecture) · [Benchmarks](docs/benchmarks.md) · [Chaos scenarios](scenarios/README.md) · [Judge Q&A](docs/judge-qa.md)
 
