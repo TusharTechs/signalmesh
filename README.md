@@ -100,6 +100,25 @@ answer*. Traditional gateways stop at the load balancer.
 
 Full component breakdown: [`docs/architecture.md`](docs/architecture.md).
 
+## The control plane, live
+
+Steady state — three nodes in consensus, both providers healthy, and every
+request in the decision stream carrying the reason codes that produced it.
+
+![SignalMesh dashboard in steady state](docs/assets/dashboard-healthy.png)
+
+The same board mid-failure. `mock-primary` is returning **HTTP 200** with a
+contract-violating body: consensus marks it `UNHEALTHY` at **100% contract
+failure**, traffic reroutes to the zero-cost fallback, and an agent stuck
+retrying a high-risk `financial_action` has been stopped and escalated —
+`HUMAN_REVIEW_BLOCK_AUTOMATIC_ACTION`, not a guess.
+
+![SignalMesh dashboard absorbing a semantic failure and an agent loop](docs/assets/dashboard-chaos.png)
+
+Note what did **not** move: all three nodes still alive, quorum intact, and
+critical/normal bulkheads untouched at `0/100` and `0/50`. The failure is
+contained to the provider that caused it.
+
 ## Reason codes — every decision is explainable
 
 No black box. Every response carries `X-SignalMesh-Provider`,
