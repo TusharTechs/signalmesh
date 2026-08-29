@@ -158,3 +158,14 @@ func (b *Breaker) setState(state State) {
 	b.successes = 0
 	b.halfOpenProbes = 0
 }
+
+// Trip forces the breaker into the OPEN state.
+// This is used when SignalMesh detects an agent-level incident such as a retry loop.
+func (b *Breaker) Trip() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != StateOpen {
+		b.setState(StateOpen)
+	}
+}

@@ -10,12 +10,18 @@ import (
 	"signalmesh/internal/providers"
 )
 
+// HealthSource provides provider health.
+type HealthSource interface {
+	GetProviderHealth(name string) providers.ProviderHealth
+}
+
 // ProviderEntry binds a provider to its circuit breaker and routing metadata.
 type ProviderEntry struct {
 	Provider   providers.Provider
 	Breaker    *circuitbreaker.Breaker
 	IsFallback bool
 	Priority   int
+	CostUSD    float64
 }
 
 // ProviderEvaluation explains how a provider was scored during routing.
@@ -36,18 +42,31 @@ type Decision struct {
 
 // Router selects providers using deterministic policy-driven scoring.
 type Router struct {
-	mu      sync.RWMutex
-	entries []ProviderEntry
-	logger  *slog.Logger
+	mu           sync.RWMutex
+	entries      []ProviderEntry
+	healthSource HealthSource
+	logger       *slog.Logger
 }
 
-func New(logger *slog.Logger) *Router {
+func New(logger *slog.Logger, healthSource HealthSource) *Router {
 	return &Router{
-		logger: logger,
+		healthSource: healthSource,
+		logger:       logger,
 	}
 }
 
+// AddProvider adds a provider with a default estimated cost.
 func (r *Router) AddProvider(p providers.Provider, breaker *circuitbreaker.Breaker, isFallback bool) {
+	r.AddProviderWithCost(p, breaker, isFallback, 0.0001)
+}
+
+// AddProviderWithCost adds a provider with an explicit estimated request cost.
+func (r *Router) AddProviderWithCost(
+	p providers.Provider,
+	breaker *circuitbreaker.Breaker,
+	isFallback bool,
+	costUSD float64,
+) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -56,11 +75,16 @@ func (r *Router) AddProvider(p providers.Provider, breaker *circuitbreaker.Break
 		Breaker:    breaker,
 		IsFallback: isFallback,
 		Priority:   len(r.entries),
+		CostUSD:    costUSD,
 	})
 }
 
-// Select chooses the best provider for the request and policy.
-func (r *Router) Select(req providers.ModelRequest, pol policy.Policy) (*ProviderEntry, *Decision, error) {
+// Select chooses the best provider for the request, policy, and remaining budget.
+func (r *Router) Select(
+	req providers.ModelRequest,
+	pol policy.Policy,
+	budgetRemainingUSD float64,
+) (*ProviderEntry, *Decision, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -99,10 +123,40 @@ func (r *Router) Select(req providers.ModelRequest, pol policy.Policy) (*Provide
 		}
 
 		health := entry.Provider.GetHealth()
+		if r.healthSource != nil {
+			health = r.healthSource.GetProviderHealth(name)
+		}
+
+		if health.ProviderName == "" {
+			health.ProviderName = name
+		}
 
 		if health.Status == "UNHEALTHY" {
 			eval.Allowed = false
 			eval.ReasonCodes = append(eval.ReasonCodes, "PROVIDER_UNHEALTHY")
+			decision.Evaluations = append(decision.Evaluations, eval)
+			continue
+		}
+
+		// Budget remaining enforcement.
+		if budgetRemainingUSD < 0 && entry.CostUSD > 0 {
+			eval.Allowed = false
+			eval.ReasonCodes = append(eval.ReasonCodes, "REMAINING_BUDGET_NEGATIVE")
+			decision.Evaluations = append(decision.Evaluations, eval)
+			continue
+		}
+
+		if budgetRemainingUSD >= 0 && entry.CostUSD > budgetRemainingUSD {
+			eval.Allowed = false
+			eval.ReasonCodes = append(eval.ReasonCodes, "PROVIDER_COST_EXCEEDS_REMAINING_BUDGET")
+			decision.Evaluations = append(decision.Evaluations, eval)
+			continue
+		}
+
+		// Request-level budget enforcement.
+		if pol.MaxCostUSD > 0 && entry.CostUSD > pol.MaxCostUSD {
+			eval.Allowed = false
+			eval.ReasonCodes = append(eval.ReasonCodes, "ESTIMATED_COST_EXCEEDS_REQUEST_BUDGET")
 			decision.Evaluations = append(decision.Evaluations, eval)
 			continue
 		}
@@ -146,6 +200,15 @@ func (r *Router) Select(req providers.ModelRequest, pol policy.Policy) (*Provide
 			if health.ContractFailurePct > 10 {
 				eval.ReasonCodes = append(eval.ReasonCodes, "CONTRACT_FAILURE_RATE_HIGH")
 			}
+		}
+
+		// Cost component.
+		if entry.CostUSD == 0 {
+			score += 10
+			eval.ReasonCodes = append(eval.ReasonCodes, "ZERO_COST_PROVIDER")
+		} else if pol.MaxCostUSD > 0 && entry.CostUSD <= pol.MaxCostUSD {
+			score += 5
+			eval.ReasonCodes = append(eval.ReasonCodes, "WITHIN_REQUEST_BUDGET")
 		}
 
 		// Fallback penalty.
