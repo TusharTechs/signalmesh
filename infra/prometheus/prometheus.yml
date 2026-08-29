@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: signalmesh-node-a
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+
+  - job_name: signalmesh-node-b
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+
+  - job_name: signalmesh-node-c
+    static_configs:
+      - targets: ["host.docker.internal:8082"]
