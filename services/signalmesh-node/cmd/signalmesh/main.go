@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"signalmesh/internal/admission"
 	"signalmesh/internal/budget"
+	"signalmesh/internal/chaos"
 	"signalmesh/internal/circuitbreaker"
 	"signalmesh/internal/cluster"
 	"signalmesh/internal/escalation"
@@ -102,6 +104,23 @@ func main() {
 	budgetManager := budget.NewManager(globalBudget, defaultAgentBudget)
 	incidentReporter := incident.NewReporter(nodeID, bus, logger)
 	escalator := escalation.NewEscalator(nodeID, bus, logger)
+	chaosEngine := chaos.NewEngine(store, logger)
+
+	admissionManager := admission.NewManager(
+		admission.Config{
+			Concurrency: envInt("ADMISSION_CRITICAL_CONCURRENCY", 100),
+			MaxQueue:    envInt("ADMISSION_CRITICAL_QUEUE", 100),
+		},
+		admission.Config{
+			Concurrency: envInt("ADMISSION_NORMAL_CONCURRENCY", 50),
+			MaxQueue:    envInt("ADMISSION_NORMAL_QUEUE", 50),
+		},
+		admission.Config{
+			Concurrency: envInt("ADMISSION_BACKGROUND_CONCURRENCY", 10),
+			MaxQueue:    envInt("ADMISSION_BACKGROUND_QUEUE", 10),
+		},
+		envInt("ADMISSION_GLOBAL_MAX_ACTIVE", 200),
+	)
 
 	handler := proxy.NewHandler(
 		nodeID,
@@ -111,6 +130,7 @@ func main() {
 		budgetManager,
 		escalator,
 		incidentReporter,
+		admissionManager,
 	)
 
 	mux := http.NewServeMux()
@@ -229,10 +249,39 @@ func main() {
 		_ = json.NewEncoder(w).Encode(incidentReporter.List())
 	})
 
-	mux.HandleFunc("/debug/escalations", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/debug/admission", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(escalator.List())
+		_ = json.NewEncoder(w).Encode(admissionManager.Status())
+	})
+
+	mux.HandleFunc("/debug/chaos/scenario", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req chaos.ScenarioRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", http.StatusBadRequest)
+			return
+		}
+
+		result, err := chaosEngine.Run(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	mux.HandleFunc("/debug/chaos/scenarios", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(chaosEngine.Active())
 	})
 
 	srv := &http.Server{

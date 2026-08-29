@@ -34,6 +34,7 @@ type ModelRequest struct {
 	TaskType  string `json:"task_type"`
 	RiskLevel string `json:"risk_level"`
 	AgentID   string `json:"agent_id"`
+	Priority  string `json:"priority,omitempty"`
 }
 
 // Message is a chat-style message.

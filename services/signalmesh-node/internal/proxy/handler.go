@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"signalmesh/internal/admission"
 	"signalmesh/internal/budget"
 	"signalmesh/internal/escalation"
 	"signalmesh/internal/incident"
@@ -39,6 +40,7 @@ type Handler struct {
 	budgets      *budget.Manager
 	escalator    *escalation.Escalator
 	incidents    *incident.Reporter
+	admission    *admission.Manager
 }
 
 // NewHandler creates a proxy handler.
@@ -50,6 +52,7 @@ func NewHandler(
 	budgets *budget.Manager,
 	escalator *escalation.Escalator,
 	incidents *incident.Reporter,
+	admissionManager *admission.Manager,
 ) *Handler {
 	return &Handler{
 		nodeID:       nodeID,
@@ -59,6 +62,7 @@ func NewHandler(
 		budgets:      budgets,
 		escalator:    escalator,
 		incidents:    incidents,
+		admission:    admissionManager,
 	}
 }
 
@@ -91,6 +95,26 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	pol := policy.FromRequest(req)
 	fingerprint := loopdetector.Fingerprint(req)
+	trafficClass := admission.Classify(req, pol)
+
+	deadline := time.Now().Add(pol.Deadline())
+	ctx, cancel := context.WithDeadline(r.Context(), deadline)
+	defer cancel()
+
+	acquired, admissionReasons := h.admission.Acquire(ctx, trafficClass)
+	if !acquired {
+		failure := failureState{
+			phase: "admission",
+			reasonCodes: append(
+				[]string{"ADMISSION_REJECTED"},
+				admissionReasons...,
+			),
+		}
+
+		h.writeFailure(w, req.RequestID, failure, nil)
+		return
+	}
+	defer h.admission.Release(trafficClass)
 
 	// If this exact request pattern is already looping, reject it immediately.
 	if h.loopDetector.IsLooping(fingerprint) {
@@ -114,10 +138,6 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 		h.writeFailure(w, req.RequestID, failure, esc)
 		return
 	}
-
-	deadline := time.Now().Add(pol.Deadline())
-	ctx, cancel := context.WithDeadline(r.Context(), deadline)
-	defer cancel()
 
 	maxAttempts := pol.MaxRetries + 1
 	if maxAttempts < 1 {
@@ -505,7 +525,7 @@ func (h *Handler) writeFailure(
 		status = http.StatusTooManyRequests
 	case "semantic", "quality":
 		status = http.StatusUnprocessableEntity
-	case "no_provider", "circuit":
+	case "no_provider", "circuit", "admission":
 		status = http.StatusServiceUnavailable
 	default:
 		status = http.StatusBadGateway
