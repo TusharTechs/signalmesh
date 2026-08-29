@@ -6,8 +6,7 @@
 
 *Signal Labs Hackathon 2026 — **Distributed Systems** track*
 
-<!-- Have a demo video or a deployed URL? Paste them into the line below:
-     [Demo video](YOUR_URL) · [Live demo](YOUR_URL) ·  -->
+### ▶ [Watch the 5-minute demo](https://youtu.be/2SZaINsWPrI)
 
 [Architecture](#architecture) · [Benchmarks](docs/benchmarks.md) · [Chaos scenarios](scenarios/README.md) · [Judge Q&A](docs/judge-qa.md)
 
