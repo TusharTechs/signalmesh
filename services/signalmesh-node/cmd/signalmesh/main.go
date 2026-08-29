@@ -21,6 +21,7 @@ import (
 	"signalmesh/internal/health"
 	"signalmesh/internal/incident"
 	"signalmesh/internal/loopdetector"
+	"signalmesh/internal/observability"
 	"signalmesh/internal/providers"
 	"signalmesh/internal/proxy"
 	"signalmesh/internal/router"
@@ -105,6 +106,10 @@ func main() {
 	incidentReporter := incident.NewReporter(nodeID, bus, logger)
 	escalator := escalation.NewEscalator(nodeID, bus, logger)
 	chaosEngine := chaos.NewEngine(store, logger)
+
+	metrics := observability.NewMetrics(nodeID)
+	decisionLog := observability.NewDecisionLog(200)
+	obsMiddleware := observability.NewMiddleware(nodeID, metrics, decisionLog)
 
 	admissionManager := admission.NewManager(
 		admission.Config{
@@ -284,9 +289,56 @@ func main() {
 		_ = json.NewEncoder(w).Encode(chaosEngine.Active())
 	})
 
+	mux.HandleFunc("/metrics", cors(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(metrics.Prometheus()))
+	}))
+
+	mux.HandleFunc("/api/decisions", cors(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(decisionLog.Recent(100))
+	}))
+
+	mux.HandleFunc("/api/dashboard", cors(func(w http.ResponseWriter, r *http.Request) {
+		clusterStatus := store.Status()
+
+		providerHealth := map[string]interface{}{
+			mockProvider.Name():  store.GetProviderHealth(mockProvider.Name()),
+			localProvider.Name(): store.GetProviderHealth(localProvider.Name()),
+		}
+
+		circuits := map[string]string{
+			mockProvider.Name():  string(primaryBreaker.State()),
+			localProvider.Name(): string(localBreaker.State()),
+		}
+
+		payload := map[string]interface{}{
+			"node": map[string]interface{}{
+				"node_id": nodeID,
+				"version": "0.6.0",
+			},
+			"cluster":            clusterStatus,
+			"providers":          providerHealth,
+			"circuits":           circuits,
+			"admission":          admissionManager.Status(),
+			"budget":             budgetManager.Status("demo-agent"),
+			"chaos":              chaosEngine.Active(),
+			"metrics":            metrics.Snapshot(),
+			"recent_decisions":   decisionLog.Recent(20),
+			"recent_escalations": lastEscalations(escalator.List(), 10),
+			"recent_incidents":   lastIncidents(incidentReporter.List(), 10),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+
 	srv := &http.Server{
 		Addr:         ":" + httpPort,
-		Handler:      mux,
+		Handler:      obsMiddleware.Wrap(mux),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,
@@ -349,4 +401,57 @@ func envFloat(key string, fallback float64) float64 {
 	}
 
 	return f
+}
+
+func cors(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+func lastEscalations(items []escalation.Escalation, n int) []escalation.Escalation {
+	if n <= 0 || len(items) == 0 {
+		return []escalation.Escalation{}
+	}
+
+	start := len(items) - n
+	if start < 0 {
+		start = 0
+	}
+
+	out := make([]escalation.Escalation, 0, len(items)-start)
+
+	for i := len(items) - 1; i >= start; i-- {
+		out = append(out, items[i])
+	}
+
+	return out
+}
+
+func lastIncidents(items []incident.Incident, n int) []incident.Incident {
+	if n <= 0 || len(items) == 0 {
+		return []incident.Incident{}
+	}
+
+	start := len(items) - n
+	if start < 0 {
+		start = 0
+	}
+
+	out := make([]incident.Incident, 0, len(items)-start)
+
+	for i := len(items) - 1; i >= start; i-- {
+		out = append(out, items[i])
+	}
+
+	return out
 }

@@ -96,6 +96,7 @@ func (m *Manager) classStateFor(class Class) *classState {
 }
 
 // Acquire attempts to admit a request.
+// Acquire attempts to admit a request.
 func (m *Manager) Acquire(ctx context.Context, class Class) (bool, []string) {
 	state := m.classStateFor(class)
 
@@ -108,6 +109,36 @@ func (m *Manager) Acquire(ctx context.Context, class Class) (bool, []string) {
 		return false, []string{
 			"GLOBAL_LOAD_SHEDDING",
 			"NON_CRITICAL_TRAFFIC_SHED",
+		}
+	}
+
+	// Do not admit already-canceled or expired requests.
+	if err := ctx.Err(); err != nil {
+		reason := "ADMISSION_TIMEOUT"
+		if err == context.Canceled {
+			reason = "ADMISSION_CANCELED"
+		}
+
+		return false, []string{reason}
+	}
+
+	// Fast path: admit immediately if a concurrency slot is available.
+	select {
+	case state.sem <- struct{}{}:
+		state.admitted.Add(1)
+		m.totalActive.Add(1)
+		return true, nil
+	default:
+		// No immediate capacity. Fall through to queue handling.
+	}
+
+	// If no queue is allowed, reject immediately.
+	if state.cfg.MaxQueue == 0 {
+		state.dropped.Add(1)
+		m.totalDropped.Add(1)
+
+		return false, []string{
+			"ADMISSION_QUEUE_FULL",
 		}
 	}
 

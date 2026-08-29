@@ -93,9 +93,15 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 		req.RequestID = fmt.Sprintf("req-%d", time.Now().UnixNano())
 	}
 
+	w.Header().Set("X-SignalMesh-Agent", req.AgentID)
+	w.Header().Set("X-SignalMesh-Task", req.TaskType)
+	w.Header().Set("X-SignalMesh-Risk", req.RiskLevel)
+
 	pol := policy.FromRequest(req)
 	fingerprint := loopdetector.Fingerprint(req)
 	trafficClass := admission.Classify(req, pol)
+
+	w.Header().Set("X-SignalMesh-Traffic-Class", string(trafficClass))
 
 	deadline := time.Now().Add(pol.Deadline())
 	ctx, cancel := context.WithDeadline(r.Context(), deadline)
@@ -492,6 +498,7 @@ func (h *Handler) writeSuccess(
 	decision *router.Decision,
 ) {
 	if decision != nil {
+		w.Header().Set("X-SignalMesh-Phase", "accepted")
 		w.Header().Set("X-SignalMesh-Provider", decision.SelectedProvider)
 		w.Header().Set("X-SignalMesh-Fallback", fmt.Sprintf("%t", decision.FallbackUsed))
 		w.Header().Set("X-SignalMesh-Reasons", strings.Join(decision.ReasonCodes, ","))
@@ -540,6 +547,12 @@ func (h *Handler) writeFailure(
 
 	if len(f.reasonCodes) == 0 {
 		f.reasonCodes = append(f.reasonCodes, "UNKNOWN_FAILURE")
+	}
+
+	if f.phase == "" {
+		w.Header().Set("X-SignalMesh-Phase", "unknown")
+	} else {
+		w.Header().Set("X-SignalMesh-Phase", f.phase)
 	}
 
 	if f.decision != nil {
