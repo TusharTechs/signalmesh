@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // The dev overlay badge sits on top of the dashboard during the live demo.
+  devIndicators: false,
 };
 
 export default nextConfig;

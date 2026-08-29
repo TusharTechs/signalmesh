@@ -36,6 +36,8 @@ type Store struct {
 	seen         map[string]time.Time
 	version      uint64
 
+	heartbeatEnabled bool
+
 	chaosHandlers []func(ChaosCommand)
 }
 
@@ -46,15 +48,36 @@ func NewStore(nodeID string, clusterSize int, bus *events.Bus, logger *slog.Logg
 	}
 
 	return &Store{
-		nodeID:       nodeID,
-		clusterSize:  clusterSize,
-		bus:          bus,
-		logger:       logger,
-		nodes:        make(map[string]NodeStatus),
-		observations: make(map[string]map[string]ProviderHealthObservation),
-		local:        make(map[string]providers.ProviderHealth),
-		seen:         make(map[string]time.Time),
+		nodeID:           nodeID,
+		clusterSize:      clusterSize,
+		bus:              bus,
+		logger:           logger,
+		nodes:            make(map[string]NodeStatus),
+		observations:     make(map[string]map[string]ProviderHealthObservation),
+		local:            make(map[string]providers.ProviderHealth),
+		seen:             make(map[string]time.Time),
+		heartbeatEnabled: true,
 	}
+}
+
+// SetHeartbeatEnabled toggles whether this node publishes heartbeats.
+// Disabling it simulates a node failure without killing the process: the rest
+// of the cluster ages this node out via heartbeat timeout, stops counting its
+// observations toward consensus, and keeps serving traffic.
+func (s *Store) SetHeartbeatEnabled(enabled bool) {
+	s.mu.Lock()
+	s.heartbeatEnabled = enabled
+	s.mu.Unlock()
+
+	s.logger.Warn("Node heartbeat toggled", "node_id", s.nodeID, "enabled", enabled)
+}
+
+// HeartbeatEnabled reports whether this node is currently publishing heartbeats.
+func (s *Store) HeartbeatEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.heartbeatEnabled
 }
 
 // OnChaos registers a handler for cluster-wide chaos commands.
@@ -120,6 +143,10 @@ func (s *Store) cleanupLoop(ctx context.Context) {
 
 func (s *Store) publishHeartbeat() {
 	s.mu.Lock()
+	if !s.heartbeatEnabled {
+		s.mu.Unlock()
+		return
+	}
 	s.version++
 	hb := NodeHeartbeat{
 		EventID:   events.NewID("hb"),
@@ -492,8 +519,8 @@ func (s *Store) Status() ClusterStatus {
 
 		s.mu.RLock()
 		if byNode, ok := s.observations[name]; ok {
-			for _, obs := range byNode {
-				if now.Sub(obs.Timestamp) <= observationTTL {
+			for nodeID, obs := range byNode {
+				if now.Sub(obs.Timestamp) <= observationTTL && s.nodeAliveLocked(nodeID, now) {
 					observations++
 				}
 			}

@@ -1,9 +1,14 @@
 name: signalmesh
 
+# The demo needs only `nats` (`make infra`). postgres + redis are provisioned
+# for the intended durable-audit / shared-state design but are not on the
+# request path in this prototype. prometheus + grafana are optional metrics
+# scraping. `make infra-full` starts everything.
+
 services:
   nats:
     image: nats:2.10-alpine
-    command: ["--jetstream", "--store", "/data"]
+    command: ["-js"]
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -40,6 +45,62 @@ services:
       - "3001:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
+
+  node-a:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.node
+    environment:
+      NODE_ID: node-a
+      HTTP_PORT: "8080"
+      NATS_URL: nats://nats:4222
+      SIGNALMESH_CLUSTER_SIZE: "3"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - nats
+
+  node-b:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.node
+    environment:
+      NODE_ID: node-b
+      HTTP_PORT: "8080"
+      NATS_URL: nats://nats:4222
+      SIGNALMESH_CLUSTER_SIZE: "3"
+    ports:
+      - "8081:8080"
+    depends_on:
+      - nats
+
+  node-c:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.node
+    environment:
+      NODE_ID: node-c
+      HTTP_PORT: "8080"
+      NATS_URL: nats://nats:4222
+      SIGNALMESH_CLUSTER_SIZE: "3"
+    ports:
+      - "8082:8080"
+    depends_on:
+      - nats
+
+  lb:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.lb
+    environment:
+      LB_PORT: "9000"
+      LB_BACKENDS: http://node-a:8080,http://node-b:8080,http://node-c:8080
+    ports:
+      - "9000:9000"
+    depends_on:
+      - node-a
+      - node-b
+      - node-c
 
 volumes:
   nats-data:

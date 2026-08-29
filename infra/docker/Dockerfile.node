@@ -1,0 +1,10 @@
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY services/signalmesh-node/go.mod services/signalmesh-node/go.sum ./
+RUN go mod download
+COPY services/signalmesh-node/ .
+RUN CGO_ENABLED=0 go build -o /signalmesh ./cmd/signalmesh
+
+FROM alpine:3.20
+COPY --from=build /signalmesh /signalmesh
+ENTRYPOINT ["/signalmesh"]

@@ -159,6 +159,17 @@ func (b *Breaker) setState(state State) {
 	b.halfOpenProbes = 0
 }
 
+// Reset returns the breaker to CLOSED. Used when an operator (or a chaos
+// scenario restore) declares the underlying dependency healthy again.
+func (b *Breaker) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != StateClosed {
+		b.setState(StateClosed)
+	}
+}
+
 // Trip forces the breaker into the OPEN state.
 // This is used when SignalMesh detects an agent-level incident such as a retry loop.
 func (b *Breaker) Trip() {

@@ -16,3 +16,9 @@ data/
 *.sqlite
 .idea/
 .vscode/
+
+# operator stage plan, not a project doc
+RUN-OF-SHOW.md
+
+# local editor/tooling config
+.claude/

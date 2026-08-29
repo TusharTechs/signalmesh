@@ -105,7 +105,12 @@ func main() {
 	budgetManager := budget.NewManager(globalBudget, defaultAgentBudget)
 	incidentReporter := incident.NewReporter(nodeID, bus, logger)
 	escalator := escalation.NewEscalator(nodeID, bus, logger)
-	chaosEngine := chaos.NewEngine(store, logger)
+	selfURL := env("SELF_URL", "http://localhost:"+httpPort)
+	chaosEngine := chaos.NewEngine(store, logger, selfURL)
+	chaosEngine.OnRestore(func() {
+		primaryBreaker.Reset()
+		localBreaker.Reset()
+	})
 
 	metrics := observability.NewMetrics(nodeID)
 	decisionLog := observability.NewDecisionLog(200)
@@ -254,6 +259,12 @@ func main() {
 		_ = json.NewEncoder(w).Encode(incidentReporter.List())
 	})
 
+	mux.HandleFunc("/debug/escalations", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(escalator.List())
+	})
+
 	mux.HandleFunc("/debug/admission", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -286,7 +297,10 @@ func main() {
 	mux.HandleFunc("/debug/chaos/scenarios", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(chaosEngine.Active())
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"available": chaosEngine.Scenarios(),
+			"active":    chaosEngine.Active(),
+		})
 	})
 
 	mux.HandleFunc("/metrics", cors(func(w http.ResponseWriter, r *http.Request) {

@@ -48,7 +48,7 @@ func NewObserver(
 		store:     store,
 		providers: providerList,
 		logger:    logger,
-		interval:  2 * time.Second,
+		interval:  1500 * time.Millisecond,
 		results:   make(map[string][]probeResult),
 	}
 }
@@ -154,12 +154,24 @@ func (o *Observer) record(provider string, result probeResult) {
 	o.results[provider] = results
 }
 
-func (o *Observer) computeHealth(provider string) providers.ProviderHealth {
-	o.mu.RLock()
-	results := o.results[provider]
-	o.mu.RUnlock()
+// healthWindow bounds how far back probe history influences the current health
+// verdict. It keeps recovery after a resolved incident fast and visible on
+// stage (roughly one window of clean probes) instead of waiting for a large
+// ring buffer to flush.
+const healthWindow = 15 * time.Second
 
+func (o *Observer) computeHealth(provider string) providers.ProviderHealth {
 	now := time.Now()
+
+	o.mu.RLock()
+	all := o.results[provider]
+	results := make([]probeResult, 0, len(all))
+	for _, r := range all {
+		if now.Sub(r.timestamp) <= healthWindow {
+			results = append(results, r)
+		}
+	}
+	o.mu.RUnlock()
 
 	if len(results) == 0 {
 		return providers.ProviderHealth{

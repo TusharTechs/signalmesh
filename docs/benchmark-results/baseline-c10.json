@@ -1,0 +1,20 @@
+{
+  "avg_ms": 176,
+  "concurrency": 10,
+  "duration_ms": 3609,
+  "failed": 0,
+  "p50_ms": 176,
+  "p95_ms": 199,
+  "p99_ms": 201,
+  "providers": {
+    "mock-primary": 200
+  },
+  "requests_per_s": 55.40497649526702,
+  "started_at": "2026-08-29T15:53:46.97652+05:30",
+  "status_codes": {
+    "200": 200
+  },
+  "successful": 200,
+  "total": 200,
+  "url": "http://localhost:9000/v1/chat/completions"
+}
